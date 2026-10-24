@@ -5,16 +5,16 @@
     "description": "Katalog software desktop independen untuk Debian dan keluarga Linux.",
     "searchMode": "client-side",
     "pageSize": 12,
-    "updatedAt": "2026-10-21"
+    "updatedAt": "2026-10-24"
   },
   "software": [
     {
       "id": "paketscope",
       "slug": "paketscope",
       "name": "PaketScope",
-      "version": "3.0.0.dev2",
-      "summary": "Pengelola aplikasi desktop native untuk melihat inventaris APT/dpkg dan Flatpak; versi pengembangan menambahkan simulasi serta konfirmasi untuk install/remove/purge APT, pemeriksaan update, dan ekspor.",
-      "description": "PaketScope 3 sedang diuji sebagai aplikasi desktop native berbasis Qt. Source pengembangan memiliki alur pengelolaan APT melalui simulasi dan autentikasi sistem, tetapi paket .deb belum menjadi rilis publik terverifikasi.",
+      "version": "3.0.0.dev3",
+      "summary": "Pengelola aplikasi desktop native dengan inventaris paket, operasi APT yang dikonfirmasi, serta System & Code Lab untuk inspeksi sistem lokal dan analisis statis kode.",
+      "description": "PaketScope 3 sedang diuji sebagai aplikasi desktop native berbasis Qt. System & Code Lab menyediakan snapshot Linux read-only, viewer source lokal, dan petunjuk tinjauan statis kode. Mode administrator bersifat opt-in, dibatasi, dan meminta persetujuan Polkit per aksi; paket .deb belum menjadi rilis publik terverifikasi.",
       "category": "Pengelolaan aplikasi",
       "status": "testing",
       "type": "desktop",
@@ -42,6 +42,9 @@
         "Inventaris baca-saja",
         "Pencarian dan filter",
         "Pemeriksaan pembaruan sesuai permintaan",
+        "System & Code Lab read-only",
+        "Code Inspector dengan petunjuk tinjauan statis",
+        "Mode administrator terbatas dengan persetujuan Polkit",
         "Ekspor CSV",
         "Cadangan terenkripsi"
       ],

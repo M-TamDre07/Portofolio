@@ -112,3 +112,85 @@ def test_whole_root_and_pseudo_filesystems_are_not_scanned(tmp_path):
     for path in ("/", "/proc", "/sys", "/dev", "/run"):
         with pytest.raises(CodeInspectionError, match="pseudo-filesystem"):
             inspect_code_path(path)
+
+
+def test_python_static_review_flags_dynamic_execution_shell_deserialization_and_network(tmp_path):
+    source = tmp_path / "review.py"
+    source.write_text(
+        "import subprocess, pickle, requests\n"
+        "def review(value):\n"
+        "    eval(value)\n"
+        "    subprocess.run(value, shell=True)\n"
+        "    pickle.loads(value)\n"
+        "    requests.get('https://example.invalid')\n",
+        encoding="utf-8",
+    )
+
+    report = inspect_code_path(source)
+    findings = {(item.rule_id, item.line) for item in report.files[0].findings}
+
+    assert ("dynamic-execution", 3) in findings
+    assert ("subprocess-shell", 4) in findings
+    assert ("unsafe-deserialization", 5) in findings
+    assert ("network-access", 6) in findings
+    assert all(item.line > 0 for item in report.files[0].findings)
+    assert len(report.files[0].findings) <= 80
+
+
+def test_code_inspector_skips_sensitive_directory_and_rejects_viewer_access(tmp_path):
+    private_store = tmp_path / ".aws"
+    private_store.mkdir()
+    config = private_store / "config"
+    config.write_text("aws_access_key_id=not-for-display", encoding="utf-8")
+    ordinary = tmp_path / "module.py"
+    ordinary.write_text("def safe():\n    return True\n", encoding="utf-8")
+
+    report = inspect_code_path(tmp_path)
+
+    assert {item.path for item in report.files} == {"module.py"}
+    with pytest.raises(CodeInspectionError, match="rahasia|lokasi"):
+        inspect_code_path(config)
+    with pytest.raises(CodeInspectionError, match="rahasia|lokasi"):
+        read_inspected_source(config)
+
+
+def test_non_python_source_reports_shell_and_dynamic_execution_review_hints(tmp_path):
+    source = tmp_path / "sample.js"
+    source.write_text(
+        "const value = eval(input);\nconst options = { shell: true };\n",
+        encoding="utf-8",
+    )
+
+    report = inspect_code_path(source)
+
+    assert {item.rule_id for item in report.files[0].findings} == {
+        "dynamic-execution", "shell-execution",
+    }
+
+
+def test_python_safe_yaml_loader_does_not_create_unsafe_deserialization_hint(tmp_path):
+    source = tmp_path / "safe_yaml.py"
+    source.write_text(
+        "import yaml\n"
+        "def parse(payload):\n"
+        "    return yaml.load(payload, Loader=yaml.SafeLoader)\n",
+        encoding="utf-8",
+    )
+
+    report = inspect_code_path(source)
+
+    assert "yaml-deserialization" not in {
+        item.rule_id for item in report.files[0].findings
+    }
+
+
+def test_folder_scan_enforces_total_bytes_budget(tmp_path, monkeypatch):
+    (tmp_path / "a.py").write_text("def first(): return 1\\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("def second(): return 2\\n", encoding="utf-8")
+    monkeypatch.setattr(code_inspector, "MAX_TOTAL_BYTES", 24)
+
+    report = inspect_code_path(tmp_path)
+
+    assert report.scanned_files == 1
+    assert report.skipped_files == 1
+    assert any("Batas data total" in note for note in report.diagnostics)

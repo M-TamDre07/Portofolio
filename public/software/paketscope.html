@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <title>PaketScope 3 — Native Linux software inventory | Linux Software Lab</title>
-<meta name="description" content="PaketScope 3 adalah aplikasi desktop native Linux yang sedang dikembangkan untuk membantu pengguna menelusuri inventaris APT/dpkg dan Flatpak, memeriksa pembaruan sesuai permintaan, mengekspor CSV, dan membuat cadangan terenkripsi.">
+<meta name="description" content="PaketScope 3 adalah aplikasi desktop native Linux yang sedang dikembangkan dengan inventaris paket, System & Code Lab read-only, viewer source lokal, dan analisis statis kode tanpa menjalankan source.">
 <meta name="author" content="Muhammad Andreatama">
 <meta name="robots" content="index,follow">
 <link rel="canonical" href="https://linux-software-lab.vercel.app/software/paketscope.html">
@@ -62,7 +62,7 @@
 <a class="eyebrow" href="/software/">← KEMBALI KE KATALOG</a>
 <div class="detail-title-row"><img class="detail-icon" src="/assets/images/paketscope-icon.svg" alt="" width="72" height="72"><span class="detail-category">01 / PENGELOLAAN APLIKASI · V3</span></div>
 <h1>Inventaris <span>Linux yang lebih jelas.</span></h1>
-<p class="hero-lead">PaketScope 3 dikembangkan sebagai pengelola aplikasi desktop native berbasis Qt. Source pengembangan kini menyediakan pencarian paket APT serta alur pemasangan, penghapusan, dan purge satu paket dengan simulasi, konfirmasi eksplisit, dan autentikasi sistem. Inventaris Flatpak dapat dilihat, tetapi perubahan paket Flatpak belum tersedia.</p>
+<p class="hero-lead">PaketScope 3 dikembangkan sebagai pengelola aplikasi desktop native berbasis Qt. Selain inventaris dan operasi APT terkonfirmasi, System &amp; Code Lab menyediakan snapshot sistem read-only serta viewer dan analisis statis untuk source code yang dipilih pengguna. Mode Administrator bersifat opt-in, meminta persetujuan Polkit untuk setiap aksi, dan tidak menjalankan seluruh aplikasi sebagai root. Biner hanya diperiksa metadatanya; fitur ini bukan decompiler. Inventaris Flatpak dapat dilihat, tetapi perubahan paket Flatpak belum tersedia.</p>
 <div class="hero-actions"><span class="status-badge">Pratinjau pengembangan</span><a class="btn btn-primary" href="https://github.com/M-TamDre07/Linux-Software-Lab/tree/main/apps/paketscope" target="_blank" rel="noopener noreferrer">Lihat kode sumber ↗</a><a class="btn btn-secondary" href="/software/">Kembali ke katalog</a></div>
 <p class="detail-disclaimer">Status: pratinjau pengembangan. Belum tersedia paket .deb resmi, repository APT, checksum rilis, tanda tangan distribusi, atau audit keamanan independen.</p>
 </div>
@@ -101,13 +101,14 @@
 
 <section class="section section-alt"><div class="container detail-body-grid">
 <div class="detail-body"><span class="eyebrow">02 / PRIVASI & KEAMANAN</span><h2>Data lokal. Tindakan eksplisit.</h2>
-<p>PaketScope berjalan sebagai pengguna biasa untuk inventaris, pencarian, dan ekspor. Perubahan APT hanya didelegasikan ke autentikasi sistem setelah simulasi dan persetujuan eksplisit; aplikasi GUI tidak berjalan sebagai root. Tidak ada tugas jaringan latar belakang atau pengiriman daftar aplikasi ke layanan pihak ketiga.</p>
+<p>PaketScope berjalan sebagai pengguna biasa untuk inventaris, pencarian, ekspor, dan System &amp; Code Lab. Code Inspector membaca source lokal sebagai teks/AST dan tidak menjalankan proyek yang dianalisis. Petunjuk tinjauan statis hanya heuristik: temuan tidak otomatis membuktikan kerentanan, dan hasil kosong tidak membuktikan kode aman.</p>
+<p>Mode Administrator dibatasi ke metadata sistem atau pembacaan satu file teks yang diizinkan, dengan konfirmasi aplikasi dan autentikasi Polkit per aksi. Helper tidak menerima shell atau perintah bebas dan tidak mengubah file. Tidak ada tugas jaringan latar belakang atau pengiriman daftar aplikasi/hasil inspeksi ke layanan pihak ketiga.</p>
 <p>Cadangan terenkripsi menggunakan AES-256-GCM dengan salt dan nonce acak untuk setiap berkas, serta kunci turunan scrypt. Kata sandi tidak disimpan oleh aplikasi. Jika kata sandi hilang, cadangan tidak dapat dipulihkan.</p>
 <p>Ekspor CSV dan JSON hasil dekripsi merupakan berkas teks biasa yang dapat mengungkap perangkat lunak yang digunakan. Simpan hanya di lokasi tepercaya dan hapus salinan sesuai kebutuhan. Pada sistem POSIX, berkas ekspor dibuat dengan izin pemilik saja (0600), dan nilai CSV yang menyerupai formula spreadsheet dinetralkan.</p>
 <p>Enkripsi dalam kode sumber bukan pengganti audit independen. Sebelum rilis publik, proyek masih memerlukan pengujian pada instalasi Debian yang bersih, peninjauan dependensi, pengemasan bertanda tangan, dan tinjauan keamanan.</p>
 </div>
 <aside class="detail-spec"><div class="detail-spec-head"><img src="/assets/images/paketscope-icon.svg" alt="" width="36" height="36"><div><strong>PaketScope 3</strong><small>Native development preview</small></div></div>
-<div class="detail-spec-row"><span>VERSI</span><strong>3.0.0.dev2</strong></div>
+<div class="detail-spec-row"><span>VERSI</span><strong>3.0.0.dev3</strong></div>
 <div class="detail-spec-row"><span>TARGET AWAL</span><strong>Debian 13 · belum diverifikasi lintas sistem</strong></div>
 <div class="detail-spec-row"><span>SUMBER</span><strong>APT / dpkg · Flatpak</strong></div>
 <div class="detail-spec-row"><span>HAK AKSES</span><strong>Pengguna biasa · tidak butuh root</strong></div>

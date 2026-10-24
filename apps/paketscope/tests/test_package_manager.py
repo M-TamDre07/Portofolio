@@ -149,4 +149,4 @@ def test_apply_rejects_invalid_package_before_running_command(monkeypatch):
 
 
 def test_app_version_matches_development_package_version():
-    assert __version__ == "3.0.0.dev2"
+    assert __version__ == "3.0.0.dev3"

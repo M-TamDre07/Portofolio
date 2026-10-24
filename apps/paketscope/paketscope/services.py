@@ -9,10 +9,12 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
+import stat
 from pathlib import Path
 from typing import Any, Iterable
 
-from .backup import decrypt_backup, encrypt_backup
+from .backup import MAX_BACKUP_BYTES, decrypt_backup, encrypt_backup
 from .collectors import collect_inventory
 from .domain import InstalledApplication, InventorySnapshot
 from .exporting import csv_safe_record, write_private_file
@@ -65,8 +67,23 @@ class PaketScopeService:
         source: str | Path,
         passphrase: str,
     ) -> list[dict[str, Any]]:
-        """Read and decrypt a user-selected backup; never executes its contents."""
-        return decrypt_backup(Path(source).read_bytes(), passphrase)
+        """Read a bounded regular backup file and decrypt it without executing contents."""
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        descriptor = os.open(source, flags)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("Cadangan harus berupa file reguler, bukan direktori atau perangkat.")
+            if info.st_size > MAX_BACKUP_BYTES:
+                raise ValueError("Cadangan melebihi batas maksimum 64 MiB.")
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                blob = handle.read(MAX_BACKUP_BYTES + 1)
+            if len(blob) > MAX_BACKUP_BYTES:
+                raise ValueError("Ukuran cadangan berubah atau melewati batas maksimum 64 MiB.")
+        finally:
+            os.close(descriptor)
+        return decrypt_backup(blob, passphrase)
 
     def export_restored_json(
         self,

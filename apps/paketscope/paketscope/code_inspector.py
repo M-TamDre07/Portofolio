@@ -18,6 +18,7 @@ from pathlib import Path
 
 MAX_FILES = 2500
 MAX_FILE_BYTES = 2 * 1024 * 1024
+MAX_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_DEPTH = 12
 MAX_DIRECTORIES = 10000
 MAX_ENTRIES = 20000
@@ -27,6 +28,13 @@ IGNORED_DIRS = frozenset({
     ".git", ".hg", ".svn", ".venv", "venv", "env", "node_modules",
     "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache",
     ".tox", "dist", "build", "target", ".next", ".cache",
+})
+# Avoid traversing or previewing common private credential stores even when the
+# selected file itself has an innocuous name such as "config" or "settings".
+SENSITIVE_DIRS = frozenset({
+    ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".pki",
+    "private", "secrets", "credentials", "credential",
+    "system-connections", "sudoers.d", "credstore",
 })
 SECRET_NAMES = frozenset({
     "credentials", "credentials.json", "secrets", "secrets.json",
@@ -86,6 +94,15 @@ IMPORT_PATTERNS = (
 
 
 @dataclass(frozen=True, slots=True)
+class CodeFinding:
+    """A static review hint, never a proof that source is vulnerable."""
+
+    rule_id: str
+    line: int
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class CodeFileAnalysis:
     path: str
     full_path: str
@@ -97,6 +114,7 @@ class CodeFileAnalysis:
     imports: tuple[str, ...]
     symbols: tuple[str, ...]
     notes: tuple[str, ...]
+    findings: tuple[CodeFinding, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,8 +133,10 @@ class CodeInspectionError(ValueError):
 
 
 def is_sensitive_path(path: str | Path) -> bool:
-    """Conservatively exclude common secret/key filenames and formats."""
+    """Conservatively exclude secret filenames and common credential-store paths."""
     candidate = Path(path)
+    if any(part.casefold() in SENSITIVE_DIRS for part in candidate.parts):
+        return True
     name = candidate.name.casefold()
     if name.startswith(".env"):
         return True
@@ -163,15 +183,37 @@ def _elf_description(content: bytes) -> str:
     return f"{elf_class}; arsitektur {machines.get(machine_id, f'e_machine={machine_id}')}"
 
 
-def _python_details(text: str) -> tuple[list[str], list[str], list[str]]:
+def _call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _call_name(node.value)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return ""
+
+
+def _add_finding(
+    findings: list[CodeFinding], seen: set[tuple[str, int]],
+    rule_id: str, line: int, message: str,
+) -> None:
+    key = (rule_id, line)
+    if key not in seen and len(findings) < 80:
+        seen.add(key)
+        findings.append(CodeFinding(rule_id=rule_id, line=max(1, line), message=message))
+
+
+def _python_details(text: str) -> tuple[list[str], list[str], list[str], list[CodeFinding]]:
     imports: list[str] = []
     symbols: list[str] = []
     notes: list[str] = []
+    findings: list[CodeFinding] = []
+    seen: set[tuple[str, int]] = set()
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
         notes.append(f"Python AST tidak dapat diurai: baris {exc.lineno or '?'}")
-        return imports, symbols, notes
+        return imports, symbols, notes, findings
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imports.extend(alias.name for alias in node.names)
@@ -179,7 +221,93 @@ def _python_details(text: str) -> tuple[list[str], list[str], list[str]]:
             imports.append("." * node.level + (node.module or ""))
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             symbols.append(node.name)
-    return sorted(set(imports))[:80], sorted(set(symbols))[:100], notes
+        elif isinstance(node, ast.Call):
+            name = _call_name(node.func)
+            line = getattr(node, "lineno", 1)
+            if name in {"eval", "exec", "compile"}:
+                _add_finding(
+                    findings, seen, "dynamic-execution", line,
+                    "Eksekusi/evaluasi kode dinamis terdeteksi; periksa apakah input dapat dikendalikan pihak lain.",
+                )
+            elif name in {"os.system", "os.popen", "commands.getoutput", "commands.getstatusoutput"}:
+                _add_finding(
+                    findings, seen, "shell-execution", line,
+                    "Pemanggilan shell/perintah sistem terdeteksi; periksa validasi input dan kebutuhan shell.",
+                )
+            elif name.startswith("subprocess.") and name.rsplit(".", 1)[-1] in {
+                "run", "Popen", "call", "check_call", "check_output",
+            }:
+                shell_true = any(
+                    keyword.arg == "shell"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is True
+                    for keyword in node.keywords
+                )
+                if shell_true:
+                    _add_finding(
+                        findings, seen, "subprocess-shell", line,
+                        "subprocess memakai shell=True; tinjau sumber argumen dan kemungkinan injeksi perintah.",
+                    )
+            elif name in {"pickle.load", "pickle.loads", "dill.load", "dill.loads"}:
+                _add_finding(
+                    findings, seen, "unsafe-deserialization", line,
+                    "Deserialisasi pickle/dill terdeteksi; jangan memproses data yang tidak tepercaya.",
+                )
+            elif name == "yaml.load":
+                safe_loader = any(
+                    keyword.arg == "Loader"
+                    and (
+                        (isinstance(keyword.value, ast.Name)
+                         and keyword.value.id in {"SafeLoader", "CSafeLoader"})
+                        or (isinstance(keyword.value, ast.Attribute)
+                            and keyword.value.attr in {"SafeLoader", "CSafeLoader"})
+                    )
+                    for keyword in node.keywords
+                )
+                if not safe_loader:
+                    _add_finding(
+                        findings, seen, "yaml-deserialization", line,
+                        "yaml.load tanpa SafeLoader yang terlihat; tinjau loader dan kepercayaan input.",
+                    )
+            elif name in {"__import__", "importlib.import_module"}:
+                _add_finding(
+                    findings, seen, "dynamic-import", line,
+                    "Import modul dinamis terdeteksi; tinjau apakah nama modul berasal dari input tepercaya.",
+                )
+            elif name.startswith(("requests.", "urllib.request.", "httpx.", "aiohttp.", "socket.")):
+                _add_finding(
+                    findings, seen, "network-access", line,
+                    "Akses jaringan terdeteksi; periksa endpoint, validasi sertifikat, dan data yang dikirim.",
+                )
+    return sorted(set(imports))[:80], sorted(set(symbols))[:100], notes, findings
+
+
+def _text_findings(text: str) -> tuple[CodeFinding, ...]:
+    """Find a few review-worthy text patterns in non-Python languages."""
+    rules = (
+        (
+            "dynamic-execution",
+            re.compile(r"\b(?:eval|exec)\s*\(", re.IGNORECASE),
+            "Eksekusi kode dinamis terdeteksi; periksa sumber input.",
+        ),
+        (
+            "shell-execution",
+            re.compile(r"\b(?:os\.(?:system|popen)\s*\(|shell\s*[:=]\s*true\b|Runtime\.getRuntime\(\)\.exec\s*\()", re.IGNORECASE),
+            "Pola eksekusi shell/perintah terdeteksi; tinjau validasi input.",
+        ),
+        (
+            "unsafe-deserialization",
+            re.compile(r"\b(?:pickle\.(?:load|loads)|yaml\.load|unserialize\s*\()", re.IGNORECASE),
+            "Pola deserialisasi terdeteksi; jangan memproses data yang tidak tepercaya.",
+        ),
+    )
+    findings: list[CodeFinding] = []
+    seen: set[tuple[str, int]] = set()
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        for rule_id, pattern, message in rules:
+            if pattern.search(line):
+                _add_finding(findings, seen, rule_id, line_no, message)
+    return tuple(findings)
 
 
 def _analyze_regular_file(path: Path, relative: str) -> CodeFileAnalysis:
@@ -213,10 +341,12 @@ def _analyze_regular_file(path: Path, relative: str) -> CodeFileAnalysis:
     lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
     imports: list[str] = []
     symbols: list[str] = []
+    findings: tuple[CodeFinding, ...] = ()
     notes: list[str] = ["Analisis statis; kode tidak pernah dieksekusi."]
     if suffix in {".py", ".pyw"}:
-        imports, symbols, parse_notes = _python_details(text)
+        imports, symbols, parse_notes, findings_list = _python_details(text)
         notes.extend(parse_notes)
+        findings = tuple(findings_list)
     else:
         for pattern in IMPORT_PATTERNS:
             imports.extend(pattern.findall(text))
@@ -224,11 +354,12 @@ def _analyze_regular_file(path: Path, relative: str) -> CodeFileAnalysis:
             symbols.extend(pattern.findall(text))
         imports = sorted(set(imports))[:80]
         symbols = sorted(set(symbols))[:100]
+        findings = _text_findings(text)
     return CodeFileAnalysis(
         path=relative, full_path=str(path), kind="Source/config",
         language=language, size_bytes=len(content), line_count=lines,
         sha256=digest, imports=tuple(imports), symbols=tuple(symbols),
-        notes=tuple(notes),
+        notes=tuple(notes), findings=findings,
     )
 
 
@@ -241,8 +372,8 @@ def inspect_code_path(selected_path: str | Path) -> CodeInspectionReport:
         root = raw_path.resolve(strict=True)
     except OSError as exc:
         raise CodeInspectionError(f"Path tidak dapat diakses: {exc}") from exc
-    if is_sensitive_path(root):
-        raise CodeInspectionError("File berpotensi berisi kredensial/rahasia tidak diperiksa oleh default.")
+    if is_sensitive_path(raw_path) or is_sensitive_path(root):
+        raise CodeInspectionError("Path berpotensi memuat kredensial/rahasia tidak diperiksa oleh default.")
     if root in {Path("/"), Path("/proc"), Path("/sys"), Path("/dev"), Path("/run")}:
         raise CodeInspectionError("Pilih folder project atau direktori tertentu; root dan pseudo-filesystem tidak dipindai sebagai satu folder.")
     if not root.is_file() and not root.is_dir():
@@ -281,7 +412,7 @@ def inspect_code_path(selected_path: str | Path) -> CodeInspectionReport:
                     continue
                 entry_path = Path(entry.path)
                 if entry.is_dir(follow_symlinks=False):
-                    if entry.name in IGNORED_DIRS or depth >= MAX_DEPTH:
+                    if entry.name in IGNORED_DIRS or is_sensitive_path(entry_path) or depth >= MAX_DEPTH:
                         skipped += 1
                         continue
                     pending.append((entry_path, depth + 1))
@@ -314,14 +445,31 @@ def inspect_code_path(selected_path: str | Path) -> CodeInspectionReport:
             f"{MAX_ENTRIES} entri); sebagian isi folder dilewati."
         )
 
+    total_bytes = 0
+    total_limit_reported = False
     for path, relative in candidates[:MAX_FILES]:
         try:
+            estimated_size = path.stat().st_size
+            if estimated_size > MAX_FILE_BYTES:
+                raise CodeInspectionError(
+                    f"File melebihi batas {MAX_FILE_BYTES // 1024 // 1024} MiB."
+                )
+            if total_bytes + estimated_size > MAX_TOTAL_BYTES:
+                skipped += 1
+                if not total_limit_reported and len(diagnostics) < MAX_DIAGNOSTICS:
+                    diagnostics.append(
+                        f"Batas data total {MAX_TOTAL_BYTES // (1024 * 1024)} MiB tercapai; "
+                        "file berikutnya yang tidak muat dilewati."
+                    )
+                    total_limit_reported = True
+                continue
             analysis = _analyze_regular_file(path, relative)
         except (OSError, CodeInspectionError) as exc:
             skipped += 1
             if len(diagnostics) < MAX_DIAGNOSTICS:
                 diagnostics.append(f"{relative}: dilewati ({exc}).")
             continue
+        total_bytes += analysis.size_bytes
         files.append(analysis)
     counts: dict[str, int] = {}
     for item in files:
@@ -339,8 +487,10 @@ def read_inspected_source(selected_path: str | Path) -> str:
     """Read a selected UTF-8 source file for the local read-only code viewer."""
     raw_path = Path(selected_path).expanduser()
     if raw_path.is_symlink() or is_sensitive_path(raw_path):
-        raise CodeInspectionError("File symlink atau file rahasia tidak ditampilkan.")
+        raise CodeInspectionError("File symlink atau file dalam lokasi rahasia tidak ditampilkan.")
     path = raw_path.resolve(strict=True)
+    if is_sensitive_path(path):
+        raise CodeInspectionError("File dalam lokasi rahasia tidak ditampilkan.")
     if path.suffix.casefold() not in TEXT_SUFFIXES and path.name.casefold() not in TEXT_FILENAMES:
         raise CodeInspectionError("Viewer hanya menampilkan file teks/kode yang didukung.")
     content = _safe_read(path)

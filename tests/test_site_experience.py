@@ -121,7 +121,9 @@ class WebsiteExperienceTests(unittest.TestCase):
         source, _ = self.parse_page("software/paketscope.html")
         self.assertIn('id="install-status"', source)
         self.assertIn("Belum tersedia untuk instalasi publik", source)
-        self.assertIn("3.0.0.dev2", source)
+        manifest = (ROOT / "apps" / "paketscope" / "pyproject.toml").read_text(encoding="utf-8")
+        app_version = next(line for line in manifest.splitlines() if line.startswith("version = ")).split('"')[1]
+        self.assertIn(app_version, source)
         self.assertNotIn("apt install paketscope", source.lower())
         self.assertNotIn("curl | sudo", source.lower())
 
@@ -140,7 +142,10 @@ class WebsiteExperienceTests(unittest.TestCase):
         data = json.loads((PUBLIC / "data" / "software.json").read_text(encoding="utf-8"))
         app = next(row for row in data["software"] if row["id"] == "paketscope")
         page, _ = self.parse_page("software/paketscope.html")
-        self.assertEqual(app["version"], "3.0.0.dev2")
+        manifest = (ROOT / "apps" / "paketscope" / "pyproject.toml").read_text(encoding="utf-8")
+        app_version = next(line for line in manifest.splitlines() if line.startswith("version = ")).split('"')[1]
+        self.assertEqual(app["version"], app_version)
+        self.assertIn(app_version, page)
         self.assertIn("PaketScope 3", page)
         self.assertEqual(app["status"], "testing")
         self.assertEqual(app["releaseUrl"], "")
